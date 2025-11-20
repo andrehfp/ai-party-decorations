@@ -20,14 +20,18 @@ export async function GET(
         const iterations = iterationsStmt.all(id) as any[];
 
         const fullIterations = iterations.map((iteration) => {
-            const imagesStmt = db.prepare("SELECT data, type FROM images WHERE iterationId = ?");
-            const images = imagesStmt.all(iteration.id) as { data: string; type: string }[];
+            const imagesStmt = db.prepare("SELECT data, type, decorationType FROM images WHERE iterationId = ?");
+            const images = imagesStmt.all(iteration.id) as { data: string; type: string; decorationType: string | null }[];
+
+            const generatedImages = images.filter((img) => img.type === "generated");
+            const referenceImages = images.filter((img) => img.type === "reference");
 
             return {
                 ...iteration,
                 decorationTypes: JSON.parse(iteration.decorationTypes),
-                images: images.filter((img) => img.type === "generated").map((img) => img.data),
-                referenceImages: images.filter((img) => img.type === "reference").map((img) => img.data),
+                images: generatedImages.map((img) => img.data),
+                imageDecorationTypes: generatedImages.map((img) => img.decorationType),
+                referenceImages: referenceImages.map((img) => img.data),
             };
         });
 

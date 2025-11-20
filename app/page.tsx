@@ -56,6 +56,7 @@ type PartyIteration = {
   size: string;
   aspectRatio?: string;
   images: string[];
+  imageDecorationTypes?: (string | null)[]; // Decoration type for each image
   prompt: string;
   referenceImages: string[];
 };
@@ -119,7 +120,6 @@ export default function Home() {
   const [selectedDecorations, setSelectedDecorations] = useState<string[]>(
     DECORATION_OPTIONS.slice(0, 4),
   );
-  const [imageCount, setImageCount] = useState(3);
   const [sizeChoice, setSizeChoice] = useState<string>(SIZE_OPTIONS[0].id);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -192,7 +192,9 @@ export default function Home() {
       const imagePromises = iteration.images.map(async (src, index) => {
         const response = await fetch(src);
         const blob = await response.blob();
-        const filename = `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${index + 1}.png`;
+        const decorationType = iteration.imageDecorationTypes?.[index];
+        const typePrefix = decorationType ? `${decorationType.replace(/[^a-z0-9]/gi, '_')}_` : '';
+        const filename = `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${typePrefix}${index + 1}.png`;
         zip.file(filename, blob);
       });
       
@@ -305,16 +307,15 @@ export default function Home() {
       theme,
       details,
       selectedDecorations,
-      imageCount,
       sizeChoice,
       referenceImages,
     };
-    
+
     if (theme.trim() || details.trim() || referenceImages.length > 0) {
       setHasUnsavedChanges(true);
       localStorage.setItem('party-form-draft', JSON.stringify(formData));
     }
-  }, [theme, details, selectedDecorations, imageCount, sizeChoice, referenceImages]);
+  }, [theme, details, selectedDecorations, sizeChoice, referenceImages]);
 
   // Load form draft on mount
   useEffect(() => {
@@ -326,7 +327,6 @@ export default function Home() {
           setTheme(formData.theme || '');
           setDetails(formData.details || '');
           setSelectedDecorations(formData.selectedDecorations || DECORATION_OPTIONS.slice(0, 4));
-          setImageCount(formData.imageCount || 3);
           setSizeChoice(formData.sizeChoice || SIZE_OPTIONS[0].id);
           setReferenceImages(formData.referenceImages || []);
           setHasUnsavedChanges(true);
@@ -634,7 +634,7 @@ export default function Home() {
     setTheme(iteration.theme);
     setDetails(iteration.details ?? "");
     setSelectedDecorations(iteration.decorationTypes);
-    setImageCount(iteration.imageCount);
+    // imageCount is now derived from selectedDecorations.length
 
     const matchingSize =
       SIZE_OPTIONS.find(
@@ -681,7 +681,6 @@ export default function Home() {
           theme: theme.trim(),
           details: details.trim(),
           decorationTypes: selectedDecorations,
-          imageCount,
           size: currentSizeOption.size,
           aspectRatio: currentSizeOption.aspectRatio,
           referenceImages,
@@ -696,7 +695,11 @@ export default function Home() {
         throw new Error(data?.error ?? "Something went wrong while creating art");
       }
 
-      const data = (await response.json()) as { images: string[]; prompt: string };
+      const data = (await response.json()) as {
+        images: string[];
+        decorationTypes: string[];
+        prompts: string[];
+      };
 
       // 2. Save Iteration to DB
       const saveRes = await fetch(`/api/projects/${activeProject.id}/iterations`, {
@@ -706,11 +709,12 @@ export default function Home() {
           theme: theme.trim(),
           details: details.trim(),
           decorationTypes: selectedDecorations,
-          imageCount,
+          imageCount: selectedDecorations.length, // One image per decoration type
           size: currentSizeOption.size,
           aspectRatio: currentSizeOption.aspectRatio,
           images: data.images,
-          prompt: data.prompt,
+          imageDecorationTypes: data.decorationTypes,
+          prompt: data.prompts.join("\n\n---\n\n"), // Combine all prompts
           referenceImages,
         }),
       });
@@ -728,11 +732,12 @@ export default function Home() {
         theme: theme.trim(),
         details: details.trim() || undefined,
         decorationTypes: [...selectedDecorations],
-        imageCount,
+        imageCount: selectedDecorations.length,
         size: currentSizeOption.size,
         aspectRatio: currentSizeOption.aspectRatio,
         images: data.images,
-        prompt: data.prompt,
+        imageDecorationTypes: data.decorationTypes,
+        prompt: data.prompts.join("\n\n---\n\n"),
         referenceImages: [...referenceImages],
       };
 
@@ -1175,26 +1180,21 @@ export default function Home() {
 
                 {/* Settings Grid */}
                 <div className="grid gap-4 sm:grid-cols-2">
-                  {/* Image Count */}
+                  {/* Image Count - Info Only */}
                   <div className="rounded-xl border border-zinc-200 bg-gradient-to-br from-white to-zinc-50/50 p-5">
-                    <div className="mb-4 flex items-center justify-between">
+                    <div className="mb-2 flex items-center justify-between">
                       <label className="text-sm font-semibold text-zinc-700">
-                        Variations per batch
+                        Images to generate
                       </label>
                       <span className="rounded-full bg-pink-100 px-3 py-1 text-sm font-bold text-pink-700">
-                        {imageCount}
+                        {selectedDecorations.length}
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min={1}
-                      max={6}
-                      value={imageCount}
-                      onChange={(event) => setImageCount(Number(event.target.value))}
-                      className="w-full accent-pink-500"
-                    />
-                    <p className="mt-3 text-xs text-zinc-500">
-                      Generate up to 6 illustrations per iteration
+                    <p className="mt-3 text-xs text-zinc-600">
+                      One custom image will be generated for each selected decoration type with type-specific styling and layouts
+                    </p>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Select up to 6 decoration types above
                     </p>
                   </div>
 
@@ -1494,20 +1494,29 @@ export default function Home() {
 
                         {/* Generated Images */}
                         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {iteration.images.map((src, index) => (
+                          {iteration.images.map((src, index) => {
+                            const decorationType = iteration.imageDecorationTypes?.[index];
+                            return (
                             <div
                               key={`${iteration.id}-image-${index}`}
                               className="group/image relative overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 transition-all duration-200 hover:border-pink-300 hover:shadow-md"
                             >
+                              {decorationType && (
+                                <div className="absolute left-2 top-2 z-10">
+                                  <span className="inline-block rounded-lg bg-gradient-to-r from-pink-500 to-violet-500 px-3 py-1 text-xs font-bold text-white shadow-md">
+                                    {decorationType}
+                                  </span>
+                                </div>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => openLightbox(src, index, iteration.images)}
                                 className="relative block w-full focus:outline-none focus:ring-2 focus:ring-pink-500"
-                                aria-label={`View generated decoration ${index + 1} in full size`}
+                                aria-label={`View ${decorationType || 'decoration'} in full size`}
                               >
                                 <Image
                                   src={src}
-                                  alt={`Generated decoration ${index + 1}`}
+                                  alt={decorationType ? `${decorationType} decoration` : `Generated decoration ${index + 1}`}
                                   width={600}
                                   height={600}
                                   className="h-48 w-full object-cover transition-transform duration-300 group-hover/image:scale-105"
@@ -1526,7 +1535,9 @@ export default function Home() {
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    downloadImage(src, `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${index + 1}.png`);
+                                    const decorationType = iteration.imageDecorationTypes?.[index];
+                                    const typePrefix = decorationType ? `${decorationType.replace(/[^a-z0-9]/gi, '_')}_` : '';
+                                    downloadImage(src, `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${typePrefix}${index + 1}.png`);
                                   }}
                                   disabled={downloadingImages.has(src)}
                                   className="rounded-full bg-white/95 p-2 shadow-md transition-all hover:bg-green-50 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
@@ -1560,7 +1571,8 @@ export default function Home() {
                                 </button>
                               </div>
                             </div>
-                          ))}
+                          )}
+                          )}
                         </div>
 
                         {/* Prompt Details */}

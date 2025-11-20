@@ -4,6 +4,7 @@ import {
   type GeneratedFile,
 } from "ai";
 import { gatewayImage } from "@/lib/gateway";
+import { buildDecorationPrompt } from "@/lib/decoration-prompts";
 
 const DEFAULT_DECORATIONS = [
   "Cake topper",
@@ -40,51 +41,8 @@ const isValidAspectRatio = (
 ): value is `${number}:${number}` =>
   typeof value === "string" && /^\d+:\d+$/.test(value);
 
-const buildPrompt = ({
-  theme,
-  details,
-  decorationTypes,
-  projectName,
-  referenceCount,
-  imageCount,
-}: {
-  theme: string;
-  details?: string;
-  decorationTypes: string[];
-  projectName?: string;
-  referenceCount: number;
-  imageCount: number;
-}) => {
-  const focusList = decorationTypes.join(", ");
-  const lines = [
-    `You are an imaginative art director creating printable decorations for a kids party supply kit.`,
-    `Produce ${imageCount} cohesive illustration concepts that can be used for: ${focusList}.`,
-    `Party theme: ${theme}.`,
-  ];
-
-  if (projectName) {
-    lines.push(`Project name: ${projectName}.`);
-  }
-
-  if (details) {
-    lines.push(`Extra creative direction: ${details}.`);
-  }
-
-  if (referenceCount > 0) {
-    lines.push(
-      `Match palette and general styling cues from the ${referenceCount} reference image(s) supplied.`,
-    );
-  }
-
-  lines.push(
-    "Keep a bright, playful, kid-approved style with crisp outlines, rich textures, and layouts that are easy to cut out or print.",
-  );
-  lines.push(
-    "Avoid text-heavy layouts. Include clean or transparent backgrounds so the decorations can be layered on invitations or banners.",
-  );
-
-  return lines.join("\n");
-};
+// Legacy function - kept for reference but no longer used
+// Now using type-specific prompts from decoration-prompts.ts
 
 const fileToDataUrl = (file: GeneratedFile) => {
   const mediaType = file.mediaType ?? "image/png";
@@ -122,8 +80,8 @@ export async function POST(request: NextRequest) {
         ? body.decorationTypes
         : DEFAULT_DECORATIONS;
 
-    // Generate one image per decoration type
-    const count = clamp(decorationTypes.length, MIN_IMAGE_COUNT, MAX_IMAGE_COUNT);
+    // Limit to MAX_IMAGE_COUNT decoration types
+    const selectedTypes = decorationTypes.slice(0, MAX_IMAGE_COUNT);
 
     const referenceImages = Array.isArray(body.referenceImages)
       ? body.referenceImages.filter(
@@ -136,34 +94,52 @@ export async function POST(request: NextRequest) {
       ? body.aspectRatio
       : undefined;
 
-    const prompt = buildPrompt({
-      theme,
-      details: body.details?.trim(),
-      decorationTypes,
-      projectName: body.projectName,
-      referenceCount: referenceImages.length,
-      imageCount: count,
-    });
-
     const providerOptions =
       referenceImages.length > 0
         ? { gateway: { referenceImages } }
         : undefined;
 
-    const result = await generateImage({
-      model: gatewayImage,
-      prompt,
-      n: count,
-      size,
-      aspectRatio,
-      providerOptions,
+    // Generate one image per decoration type with type-specific prompts
+    // Making parallel API calls for better type-specific results
+    const imageGenerationPromises = selectedTypes.map(async (decorationType) => {
+      const prompt = buildDecorationPrompt(
+        decorationType,
+        theme,
+        body.details?.trim(),
+        body.projectName,
+        referenceImages.length
+      );
+
+      const result = await generateImage({
+        model: gatewayImage,
+        prompt,
+        n: 1, // One image per type
+        size,
+        aspectRatio,
+        providerOptions,
+      });
+
+      const imageDataUrl = fileToDataUrl(result.images[0]);
+
+      return {
+        image: imageDataUrl,
+        decorationType,
+        prompt,
+      };
     });
 
-    const images = result.images.map(fileToDataUrl);
+    // Wait for all images to be generated
+    const results = await Promise.all(imageGenerationPromises);
+
+    // Extract images and decoration types
+    const images = results.map((r) => r.image);
+    const types = results.map((r) => r.decorationType);
+    const prompts = results.map((r) => r.prompt);
 
     return NextResponse.json({
       images,
-      prompt,
+      decorationTypes: types,
+      prompts,
     });
   } catch (error) {
     console.error("Failed to generate party decorations:", error);

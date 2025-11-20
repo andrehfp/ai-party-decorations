@@ -31,8 +31,16 @@ db.exec(`
     iterationId TEXT NOT NULL,
     data TEXT NOT NULL, -- Base64 string
     type TEXT NOT NULL CHECK(type IN ('generated', 'reference')),
+    decorationType TEXT, -- Specific decoration type (e.g., 'Cake topper', 'Favor tags')
     FOREIGN KEY (iterationId) REFERENCES iterations (id) ON DELETE CASCADE
   );
 `);
+
+// Add decorationType column to existing images table if it doesn't exist
+try {
+  db.exec(`ALTER TABLE images ADD COLUMN decorationType TEXT;`);
+} catch (error) {
+  // Column already exists, ignore error
+}
 
 export default db;
