@@ -13,9 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Party Studio",
+  title: "AI Party Studio | Generate Whimsical Party Decorations",
   description:
-    "Generate whimsical kids party decorations powered by the Vercel AI SDK and Vercel AI Gateway.",
+    "Create cohesive printable decorations for kids parties. Describe your theme, upload inspiration photos, and get multiple AI-generated decoration pieces in one go.",
+  keywords: ["party decorations", "kids party", "AI art", "party planning", "printable decorations"],
 };
 
 export default function RootLayout({
