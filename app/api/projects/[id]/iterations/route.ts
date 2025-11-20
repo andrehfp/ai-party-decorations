@@ -17,6 +17,7 @@ export async function POST(
             size,
             aspectRatio,
             images,
+            imageDecorationTypes, // Array of decoration types matching images array
             prompt,
             referenceImages,
         } = body;
@@ -31,7 +32,7 @@ export async function POST(
     `);
 
         const insertImage = db.prepare(`
-      INSERT INTO images (id, iterationId, data, type) VALUES (?, ?, ?, ?)
+      INSERT INTO images (id, iterationId, data, type, decorationType) VALUES (?, ?, ?, ?, ?)
     `);
 
         const transaction = db.transaction(() => {
@@ -49,14 +50,30 @@ export async function POST(
             );
 
             if (Array.isArray(images)) {
-                for (const imgData of images) {
-                    insertImage.run(crypto.randomUUID(), iterationId, imgData, "generated");
+                for (let i = 0; i < images.length; i++) {
+                    const imgData = images[i];
+                    const decorationType = Array.isArray(imageDecorationTypes)
+                        ? imageDecorationTypes[i]
+                        : null;
+                    insertImage.run(
+                        crypto.randomUUID(),
+                        iterationId,
+                        imgData,
+                        "generated",
+                        decorationType
+                    );
                 }
             }
 
             if (Array.isArray(referenceImages)) {
                 for (const refData of referenceImages) {
-                    insertImage.run(crypto.randomUUID(), iterationId, refData, "reference");
+                    insertImage.run(
+                        crypto.randomUUID(),
+                        iterationId,
+                        refData,
+                        "reference",
+                        null // Reference images don't have a decoration type
+                    );
                 }
             }
         });
