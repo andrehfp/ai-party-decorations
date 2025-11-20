@@ -43,7 +43,7 @@ const MAX_REFERENCE_BYTES = 5 * 1024 * 1024; // 5MB
 
 type PartyIteration = {
   id: string;
-  createdAt: string;
+  createdAt?: string;
   theme: string;
   details?: string;
   decorationTypes: string[];
@@ -648,14 +648,14 @@ export default function Home() {
                 </span>
               )}
             </div>
-            {!activeProject || activeProject.iterations.length === 0 ? (
+            {!activeProject || activeProject.iterations.filter((it) => it !== null).length === 0 ? (
               <p className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-6 text-sm text-zinc-500">
                 No generations yet for this project. Submit a theme to start the
                 inspiration feed.
               </p>
             ) : (
               <div className="mt-6 space-y-6">
-                {activeProject.iterations.map((iteration) => (
+                {activeProject.iterations.filter((iteration) => iteration !== null).map((iteration) => (
                   <article
                     key={iteration.id}
                     className="rounded-2xl border border-zinc-100 bg-white/90 p-5 shadow-sm"
@@ -663,7 +663,7 @@ export default function Home() {
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                       <div>
                         <p className="text-xs uppercase tracking-widest text-zinc-400">
-                          {formatTimestamp(iteration.createdAt)}
+                          {iteration.createdAt ? formatTimestamp(iteration.createdAt) : 'Date unknown'}
                         </p>
                         <h3 className="text-xl font-semibold text-zinc-900">
                           {iteration.theme}
