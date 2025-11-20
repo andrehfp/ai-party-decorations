@@ -122,7 +122,8 @@ export async function POST(request: NextRequest) {
         ? body.decorationTypes
         : DEFAULT_DECORATIONS;
 
-    const count = clamp(body.imageCount ?? 3, MIN_IMAGE_COUNT, MAX_IMAGE_COUNT);
+    // Generate one image per decoration type
+    const count = clamp(decorationTypes.length, MIN_IMAGE_COUNT, MAX_IMAGE_COUNT);
 
     const referenceImages = Array.isArray(body.referenceImages)
       ? body.referenceImages.filter(

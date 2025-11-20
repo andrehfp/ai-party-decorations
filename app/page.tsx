@@ -38,14 +38,12 @@ const SIZE_OPTIONS = [
   },
 ] as const;
 
-const STORAGE_KEY = "aiparty.projects.v1";
-const ACTIVE_PROJECT_KEY = "aiparty.activeProject.v1";
 const MAX_REFERENCE_IMAGES = 3;
 const MAX_REFERENCE_BYTES = 5 * 1024 * 1024; // 5MB
 
 type PartyIteration = {
   id: string;
-  createdAt: string;
+  createdAt?: string;
   theme: string;
   details?: string;
   decorationTypes: string[];
@@ -63,18 +61,6 @@ type PartyProject = {
   createdAt: string;
   iterations: PartyIteration[];
 };
-
-const createId = () =>
-  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2);
-
-const createProject = (name: string): PartyProject => ({
-  id: createId(),
-  name,
-  createdAt: new Date().toISOString(),
-  iterations: [],
-});
 
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -105,56 +91,52 @@ export default function Home() {
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isHydrated, setIsHydrated] = useState(false);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
 
+  // Fetch projects on mount
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const loadState = () => {
+    const fetchProjects = async () => {
       try {
-        const storedProjects = window.localStorage.getItem(STORAGE_KEY);
-        if (storedProjects) {
-          const parsed = JSON.parse(storedProjects) as PartyProject[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProjects(parsed);
-            const savedActive =
-              window.localStorage.getItem(ACTIVE_PROJECT_KEY) ??
-              parsed[0]?.id ??
-              null;
-            setActiveProjectId(savedActive);
-            return;
+        const res = await fetch("/api/projects");
+        if (res.ok) {
+          const data = await res.json();
+          setProjects(data);
+          if (data.length > 0) {
+            // Automatically select the first project, but we need to fetch its details first
+            // logic handled in handleProjectSelection or a separate effect if needed.
+            // For now, let's just set the ID and let the effect below handle fetching details.
+            setActiveProjectId(data[0].id);
           }
         }
-      } catch (storageError) {
-        console.warn("Unable to read local party projects:", storageError);
+      } catch (err) {
+        console.error("Failed to load projects", err);
+      } finally {
+        setIsLoadingProjects(false);
       }
-
-      const starter = createProject("Sparkle Party Kit");
-      setProjects([starter]);
-      setActiveProjectId(starter.id);
     };
-
-    loadState();
-    setIsHydrated(true);
+    fetchProjects();
   }, []);
 
+  // Fetch active project details when selection changes
   useEffect(() => {
-    if (!isHydrated) {
-      return;
-    }
+    if (!activeProjectId) return;
 
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  }, [projects, isHydrated]);
+    const fetchProjectDetails = async () => {
+      try {
+        const res = await fetch(`/api/projects/${activeProjectId}`);
+        if (res.ok) {
+          const fullProject = await res.json();
+          setProjects((prev) =>
+            prev.map((p) => (p.id === activeProjectId ? fullProject : p))
+          );
+        }
+      } catch (err) {
+        console.error("Failed to load project details", err);
+      }
+    };
 
-  useEffect(() => {
-    if (!isHydrated || !activeProjectId) {
-      return;
-    }
-
-    window.localStorage.setItem(ACTIVE_PROJECT_KEY, activeProjectId);
-  }, [activeProjectId, isHydrated]);
+    fetchProjectDetails();
+  }, [activeProjectId]);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -164,25 +146,37 @@ export default function Home() {
   const currentSizeOption =
     SIZE_OPTIONS.find((option) => option.id === sizeChoice) ?? SIZE_OPTIONS[0];
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     const suggestedName = `Party ${projects.length + 1}`;
-    const name =
-      typeof window !== "undefined"
-        ? window.prompt("Name your new party project", suggestedName)
-        : suggestedName;
+    const name = window.prompt("Name your new party project", suggestedName);
 
     if (!name) {
       return;
     }
 
-    const project = createProject(name.trim());
-    setProjects((prev) => [...prev, project]);
-    setActiveProjectId(project.id);
-    setTheme("");
-    setDetails("");
-    setReferenceImages([]);
-    setSelectedDecorations(DECORATION_OPTIONS.slice(0, 4));
-    setError(null);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+
+      if (res.ok) {
+        const newProject = await res.json();
+        setProjects((prev) => [newProject, ...prev]);
+        setActiveProjectId(newProject.id);
+
+        // Reset form
+        setTheme("");
+        setDetails("");
+        setReferenceImages([]);
+        setSelectedDecorations(DECORATION_OPTIONS.slice(0, 4));
+        setError(null);
+      }
+    } catch (err) {
+      console.error("Failed to create project", err);
+      setError("Failed to create project. Please try again.");
+    }
   };
 
   const handleProjectSelection = (projectId: string) => {
@@ -294,6 +288,7 @@ export default function Home() {
     setError(null);
 
     try {
+      // 1. Generate Images
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: {
@@ -320,8 +315,32 @@ export default function Home() {
 
       const data = (await response.json()) as { images: string[]; prompt: string };
 
-      const iteration: PartyIteration = {
-        id: createId(),
+      // 2. Save Iteration to DB
+      const saveRes = await fetch(`/api/projects/${activeProject.id}/iterations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          theme: theme.trim(),
+          details: details.trim(),
+          decorationTypes: selectedDecorations,
+          imageCount,
+          size: currentSizeOption.size,
+          aspectRatio: currentSizeOption.aspectRatio,
+          images: data.images,
+          prompt: data.prompt,
+          referenceImages,
+        }),
+      });
+
+      if (!saveRes.ok) {
+        throw new Error("Failed to save your creation.");
+      }
+
+      const { iterationId } = await saveRes.json();
+
+      // 3. Update Local State
+      const newIteration: PartyIteration = {
+        id: iterationId,
         createdAt: new Date().toISOString(),
         theme: theme.trim(),
         details: details.trim() || undefined,
@@ -337,7 +356,7 @@ export default function Home() {
       setProjects((prev) =>
         prev.map((project) =>
           project.id === activeProject.id
-            ? { ...project, iterations: [iteration, ...project.iterations] }
+            ? { ...project, iterations: [newIteration, ...project.iterations] }
             : project,
         ),
       );
@@ -353,7 +372,7 @@ export default function Home() {
     }
   };
 
-  if (!isHydrated) {
+  if (isLoadingProjects) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans text-zinc-600">
         Loading your party studio...
@@ -390,11 +409,10 @@ export default function Home() {
                   <button
                     key={project.id}
                     onClick={() => handleProjectSelection(project.id)}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                      isActive
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${isActive
                         ? "border-pink-400 bg-pink-50/80 shadow-md"
                         : "border-zinc-200 bg-white/70 hover:border-pink-200"
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center justify-between text-sm">
                       <span className="font-semibold text-zinc-900">
@@ -479,11 +497,10 @@ export default function Home() {
                         type="button"
                         key={option}
                         onClick={() => toggleDecoration(option)}
-                        className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
-                          isSelected
+                        className={`rounded-full border px-4 py-2 text-sm font-medium transition ${isSelected
                             ? "border-pink-400 bg-pink-50 text-pink-700"
                             : "border-zinc-200 bg-white text-zinc-600 hover:border-pink-200"
-                        }`}
+                          }`}
                       >
                         {option}
                       </button>
@@ -525,11 +542,10 @@ export default function Home() {
                           type="button"
                           key={option.id}
                           onClick={() => setSizeChoice(option.id)}
-                          className={`w-full rounded-xl border px-4 py-3 text-left transition ${
-                            isActive
+                          className={`w-full rounded-xl border px-4 py-3 text-left transition ${isActive
                               ? "border-violet-400 bg-violet-50 text-violet-700"
                               : "border-zinc-200 hover:border-violet-200"
-                          }`}
+                            }`}
                         >
                           <p className="text-sm font-semibold">{option.label}</p>
                           <p className="text-xs text-zinc-500">
@@ -632,14 +648,14 @@ export default function Home() {
                 </span>
               )}
             </div>
-            {!activeProject || activeProject.iterations.length === 0 ? (
+            {!activeProject || activeProject.iterations.filter((it) => it !== null).length === 0 ? (
               <p className="mt-4 rounded-2xl border border-dashed border-zinc-200 p-6 text-sm text-zinc-500">
                 No generations yet for this project. Submit a theme to start the
                 inspiration feed.
               </p>
             ) : (
               <div className="mt-6 space-y-6">
-                {activeProject.iterations.map((iteration) => (
+                {activeProject.iterations.filter((iteration) => iteration !== null).map((iteration) => (
                   <article
                     key={iteration.id}
                     className="rounded-2xl border border-zinc-100 bg-white/90 p-5 shadow-sm"
@@ -647,7 +663,7 @@ export default function Home() {
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                       <div>
                         <p className="text-xs uppercase tracking-widest text-zinc-400">
-                          {formatTimestamp(iteration.createdAt)}
+                          {iteration.createdAt ? formatTimestamp(iteration.createdAt) : 'Date unknown'}
                         </p>
                         <h3 className="text-xl font-semibold text-zinc-900">
                           {iteration.theme}
