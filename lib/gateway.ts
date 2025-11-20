@@ -136,8 +136,8 @@ const collectImagesFromResponse = async (
           : typeof (part as { base64?: string }).base64 === "string"
             ? (part as { base64?: string }).base64
             : typeof (part as { data?: string }).data === "string"
-            ? (part as { data?: string }).data
-            : undefined;
+              ? (part as { data?: string }).data
+              : undefined;
 
       if (base64) {
         return pushImage(`data:image/png;base64,${base64}`);
@@ -367,8 +367,9 @@ const openRouterImageModel: ImageModelV2 = {
 
     // Note: Gemini image models may not support 'n' parameter for multiple images in a single request
     // Instead, we'll need to make multiple requests if n > 1
-    if (n && n > 1) {
-      console.warn(`Requesting ${n} images from OpenRouter. Note: Multiple images may require multiple API calls.`);
+    const requestCount = n && n > 1 ? n : 1;
+    if (requestCount > 1) {
+      console.log(`Requesting ${requestCount} images from OpenRouter via ${requestCount} parallel API calls.`);
     }
 
     if (size) {
@@ -399,67 +400,102 @@ const openRouterImageModel: ImageModelV2 = {
       requestHeaders["X-Title"] = title;
     }
 
-    const timestamp = new Date();
-    const response = await fetch(url, {
-      method: "POST",
-      headers: requestHeaders,
-      body: JSON.stringify(body),
-      signal: abortSignal,
-    });
+    // Helper function to make a single API call
+    const makeSingleRequest = async () => {
+      const timestamp = new Date();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify(body),
+        signal: abortSignal,
+      });
 
-    const responseText = await response.text();
-    let parsed: unknown;
-    try {
-      parsed = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      throw new Error(
-        `OpenRouter responded with non-JSON payload (status ${response.status}): ${responseText.slice(0, 200)}`,
-      );
-    }
+      const responseText = await response.text();
+      let parsed: unknown;
+      try {
+        parsed = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        throw new Error(
+          `OpenRouter responded with non-JSON payload (status ${response.status}): ${responseText.slice(0, 200)}`,
+        );
+      }
 
-    if (!response.ok) {
-      const message =
-        (parsed &&
-          typeof parsed === "object" &&
-          "error" in parsed &&
-          parsed.error &&
-          typeof parsed.error === "object" &&
-          "message" in parsed.error &&
-          typeof (parsed.error as { message?: string }).message === "string" &&
-          (parsed.error as { message?: string }).message) ||
-        (parsed &&
-          typeof parsed === "object" &&
-          "error" in parsed &&
-          typeof (parsed as { error?: string }).error === "string" &&
-          (parsed as { error?: string }).error) ||
-        (parsed &&
-          typeof parsed === "object" &&
-          "message" in parsed &&
-          typeof (parsed as { message?: string }).message === "string" &&
-          (parsed as { message?: string }).message) ||
-        `OpenRouter image generation failed (${response.status}).`;
+      if (!response.ok) {
+        const message =
+          (parsed &&
+            typeof parsed === "object" &&
+            "error" in parsed &&
+            parsed.error &&
+            typeof parsed.error === "object" &&
+            "message" in parsed.error &&
+            typeof (parsed.error as { message?: string }).message === "string" &&
+            (parsed.error as { message?: string }).message) ||
+          (parsed &&
+            typeof parsed === "object" &&
+            "error" in parsed &&
+            typeof (parsed as { error?: string }).error === "string" &&
+            (parsed as { error?: string }).error) ||
+          (parsed &&
+            typeof parsed === "object" &&
+            "message" in parsed &&
+            typeof (parsed as { message?: string }).message === "string" &&
+            (parsed as { message?: string }).message) ||
+          `OpenRouter image generation failed (${response.status}).`;
 
-      throw new Error(message);
-    }
+        throw new Error(message as string);
+      }
 
-    // Debug: Log the response structure
-    console.log("OpenRouter response structure:", JSON.stringify(parsed, null, 2));
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
 
-    const { images: dataUrls, warnings } = await collectImagesFromResponse(
-      parsed,
-      n,
-      abortSignal,
+      return { parsed, timestamp, responseHeaders };
+    };
+
+    // Make multiple parallel requests if n > 1
+    const results = await Promise.all(
+      Array.from({ length: requestCount }, () => makeSingleRequest())
     );
 
-    console.log(`Collected ${dataUrls.length} images from response`);
-    console.log(`First few characters of first image:`, dataUrls[0]?.substring(0, 50));
+    // Collect all images from all responses
+    const allDataUrls: string[] = [];
+    const allWarnings: string[] = [];
 
-    if (!dataUrls.length) {
-      console.error("Failed to extract images. Full response:", JSON.stringify(parsed, null, 2));
+    for (let i = 0; i < results.length; i++) {
+      const { parsed } = results[i];
+
+      // Debug: Log the response structure (only for first request to reduce noise)
+      if (i === 0) {
+        console.log("OpenRouter response structure:", JSON.stringify(parsed, null, 2));
+      }
+
+      const { images: dataUrls, warnings } = await collectImagesFromResponse(
+        parsed,
+        1, // Only collect 1 image per response
+        abortSignal,
+      );
+
+      console.log(`Collected ${dataUrls.length} images from request ${i + 1}/${requestCount}`);
+
+      if (dataUrls.length > 0) {
+        allDataUrls.push(...dataUrls);
+        console.log(`First few characters of image from request ${i + 1}:`, dataUrls[0]?.substring(0, 50));
+      }
+
+      if (warnings.length > 0) {
+        allWarnings.push(...warnings);
+      }
+    }
+
+    console.log(`Total collected ${allDataUrls.length} images from ${requestCount} requests`);
+
+    if (!allDataUrls.length) {
+      console.error("Failed to extract images. Full response from first request:", JSON.stringify(results[0]?.parsed, null, 2));
       throw new Error("OpenRouter returned an empty image response.");
     }
 
-    const imageBuffers = dataUrls.map((dataUrl) => {
+    const imageBuffers = allDataUrls.map((dataUrl) => {
       const parsedData = parseDataUrl(dataUrl);
       if (!parsedData) {
         throw new Error("Received invalid image data from OpenRouter.");
@@ -468,31 +504,26 @@ const openRouterImageModel: ImageModelV2 = {
       return new Uint8Array(Buffer.from(parsedData.base64, "base64"));
     });
 
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-
     const modelId =
-      (parsed &&
-        typeof parsed === "object" &&
-        typeof (parsed as { model?: string }).model === "string" &&
-        (parsed as { model?: string }).model) ||
+      ((results[0].parsed &&
+        typeof results[0].parsed === "object" &&
+        typeof (results[0].parsed as { model?: string }).model === "string" &&
+        (results[0].parsed as { model?: string }).model) as string) ||
       OPENROUTER_IMAGE_MODEL_ID;
 
     return {
       images: imageBuffers,
-      warnings,
+      warnings: allWarnings as any,
       providerMetadata: {
         openRouter: {
-          images: dataUrls,
-          raw: parsed,
+          images: allDataUrls,
+          raw: results.map(r => r.parsed) as any,
         },
       },
       response: {
-        timestamp,
+        timestamp: results[0].timestamp,
         modelId,
-        headers: responseHeaders,
+        headers: results[0].responseHeaders,
       },
     };
   },
