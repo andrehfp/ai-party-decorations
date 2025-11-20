@@ -1,7 +1,16 @@
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
-const dbPath = path.join(process.cwd(), "party.db");
+// Store database in data directory for better security
+const dataDir = path.join(process.cwd(), "data");
+
+// Ensure data directory exists
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, "party.db");
 const db = new Database(dbPath);
 
 // Initialize schema

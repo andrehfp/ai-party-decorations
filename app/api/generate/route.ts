@@ -5,6 +5,13 @@ import {
 } from "ai";
 import { gatewayImage, streamImageGeneration } from "@/lib/gateway";
 import { buildDecorationPrompt } from "@/lib/decoration-prompts";
+import {
+  validateTheme,
+  validateDetails,
+  sanitizeText,
+  validateBoolean,
+} from "@/lib/validation";
+import { validateImageDataUrls } from "@/lib/file-validation";
 
 const DEFAULT_DECORATIONS = [
   "Cake topper",
@@ -13,6 +20,28 @@ const DEFAULT_DECORATIONS = [
   "Favor tags",
   "Table centerpiece",
   "Photo booth prop",
+];
+
+const ALLOWED_DECORATION_TYPES = [
+  "Cake topper",
+  "Banner",
+  "Cup/bottle label",
+  "Favor tag",
+  "Cupcake topper",
+  "Food label",
+  "Party sign",
+  "Centerpiece",
+  "Invitation",
+  "Thank you card",
+  "Sticker",
+  "Backdrop",
+  "Garland",
+  "Photo booth prop",
+  "Gift tag",
+  "Cupcake toppers",
+  "Welcome banner",
+  "Favor tags",
+  "Table centerpiece",
 ];
 
 const DEFAULT_IMAGE_SIZE = "1024x1024";
@@ -67,28 +96,40 @@ const fileToDataUrl = (file: GeneratedFile) => {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as GenerateRequest;
-    const theme = body.theme?.trim();
 
-    if (!theme) {
-      return NextResponse.json(
-        { error: "Please provide a party theme to inspire the decorations." },
-        { status: 400 },
-      );
-    }
+    // Validate theme
+    const validatedTheme = validateTheme(body.theme);
 
-    const decorationTypes =
+    // Validate details (optional)
+    const validatedDetails = validateDetails(body.details);
+
+    // Validate project name (optional)
+    const validatedProjectName = body.projectName
+      ? sanitizeText(body.projectName, 100)
+      : undefined;
+
+    // Validate decoration types against whitelist
+    let decorationTypes =
       body.decorationTypes && body.decorationTypes.length > 0
         ? body.decorationTypes
         : DEFAULT_DECORATIONS;
 
+    // Filter to only allowed types
+    decorationTypes = decorationTypes.filter((type) =>
+      ALLOWED_DECORATION_TYPES.includes(type)
+    );
+
+    if (decorationTypes.length === 0) {
+      decorationTypes = DEFAULT_DECORATIONS;
+    }
+
     // Limit to MAX_IMAGE_COUNT decoration types
     const selectedTypes = decorationTypes.slice(0, MAX_IMAGE_COUNT);
 
-    const referenceImages = Array.isArray(body.referenceImages)
-      ? body.referenceImages.filter(
-          (img) => typeof img === "string" && img.length > 0,
-        )
-      : [];
+    // Validate reference images
+    const { valid: validatedReferenceImages } = validateImageDataUrls(
+      Array.isArray(body.referenceImages) ? body.referenceImages : []
+    );
 
     const size = isValidSize(body.size) ? body.size : DEFAULT_IMAGE_SIZE;
     const aspectRatio = isValidAspectRatio(body.aspectRatio)
@@ -99,10 +140,10 @@ export async function POST(request: NextRequest) {
     if (body.stream) {
       return handleStreamingGeneration(
         selectedTypes,
-        theme,
-        body.details?.trim(),
-        body.projectName,
-        referenceImages,
+        validatedTheme,
+        validatedDetails,
+        validatedProjectName,
+        validatedReferenceImages,
         size,
         aspectRatio,
       );
@@ -110,8 +151,8 @@ export async function POST(request: NextRequest) {
 
     // Non-streaming mode (existing implementation)
     const providerOptions =
-      referenceImages.length > 0
-        ? { gateway: { referenceImages } }
+      validatedReferenceImages.length > 0
+        ? { gateway: { referenceImages: validatedReferenceImages } }
         : undefined;
 
     // Generate one image per decoration type with type-specific prompts
@@ -119,10 +160,10 @@ export async function POST(request: NextRequest) {
     const imageGenerationPromises = selectedTypes.map(async (decorationType) => {
       const prompt = buildDecorationPrompt(
         decorationType,
-        theme,
-        body.details?.trim(),
-        body.projectName,
-        referenceImages.length
+        validatedTheme,
+        validatedDetails,
+        validatedProjectName,
+        validatedReferenceImages.length
       );
 
       const result = await generateImage({
@@ -158,9 +199,24 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Failed to generate party decorations:", error);
-    const message =
-      error instanceof Error ? error.message : "Unable to generate images";
-    return NextResponse.json({ error: message }, { status: 500 });
+
+    // Return validation errors with 400, other errors with 500
+    if (error instanceof Error) {
+      if (
+        error.message.includes("required") ||
+        error.message.includes("invalid") ||
+        error.message.includes("Invalid") ||
+        error.message.includes("Unsupported") ||
+        error.message.includes("too long")
+      ) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+    }
+
+    return NextResponse.json(
+      { error: "An error occurred while generating decorations" },
+      { status: 500 }
+    );
   }
 }
 

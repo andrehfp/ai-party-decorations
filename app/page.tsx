@@ -313,13 +313,13 @@ export default function Home() {
 
     if (theme.trim() || details.trim() || referenceImages.length > 0) {
       setHasUnsavedChanges(true);
-      localStorage.setItem('party-form-draft', JSON.stringify(formData));
+      sessionStorage.setItem('party-form-draft', JSON.stringify(formData));
     }
   }, [theme, details, selectedDecorations, sizeChoice, referenceImages]);
 
   // Load form draft on mount
   useEffect(() => {
-    const draft = localStorage.getItem('party-form-draft');
+    const draft = sessionStorage.getItem('party-form-draft');
     if (draft) {
       try {
         const formData = JSON.parse(draft);
@@ -339,7 +339,7 @@ export default function Home() {
 
   // Clear draft after successful generation
   const clearFormDraft = useCallback(() => {
-    localStorage.removeItem('party-form-draft');
+    sessionStorage.removeItem('party-form-draft');
     setHasUnsavedChanges(false);
   }, []);
 

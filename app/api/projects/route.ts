@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { validateName } from "@/lib/validation";
 
 export async function GET() {
     try {
@@ -22,28 +23,32 @@ export async function GET() {
         return NextResponse.json(projectsWithCounts);
     } catch (error) {
         console.error("Failed to fetch projects:", error);
-        return NextResponse.json({ error: "Failed to fetch projects" }, { status: 500 });
+        return NextResponse.json({ error: "An error occurred while fetching projects" }, { status: 500 });
     }
 }
 
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name } = body;
 
-        if (!name) {
-            return NextResponse.json({ error: "Name is required" }, { status: 400 });
-        }
+        // Validate and sanitize input
+        const validatedName = validateName(body.name);
 
         const id = crypto.randomUUID();
         const createdAt = new Date().toISOString();
 
         const stmt = db.prepare("INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)");
-        stmt.run(id, name, createdAt);
+        stmt.run(id, validatedName, createdAt);
 
-        return NextResponse.json({ id, name, createdAt, iterations: [] });
+        return NextResponse.json({ id, name: validatedName, createdAt, iterations: [] });
     } catch (error) {
         console.error("Failed to create project:", error);
-        return NextResponse.json({ error: "Failed to create project" }, { status: 500 });
+
+        // Return validation errors with 400, other errors with 500
+        if (error instanceof Error && (error.message.includes("required") || error.message.includes("invalid") || error.message.includes("too long"))) {
+            return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+
+        return NextResponse.json({ error: "An error occurred while creating the project" }, { status: 500 });
     }
 }

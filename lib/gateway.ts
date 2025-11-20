@@ -6,6 +6,7 @@ const OPENROUTER_IMAGE_MODEL_ID =
   process.env.OPENROUTER_MODEL_ID ?? "google/gemini-2.5-flash-image";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const FETCH_TIMEOUT_MS = 60000; // 60 seconds
 
 const getOpenRouterApiKey = () => {
   const key = process.env.OPENROUTER_API_KEY;
@@ -15,6 +16,97 @@ const getOpenRouterApiKey = () => {
     );
   }
   return key;
+};
+
+/**
+ * Validates a URL to prevent SSRF attacks
+ * Ensures URL uses HTTPS and doesn't point to internal/private networks
+ */
+const validateUrl = (url: string): void => {
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error("Invalid URL format");
+  }
+
+  // Only allow HTTPS protocol
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error("Only HTTPS URLs are allowed");
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase();
+
+  // Blacklist internal/private hosts
+  const blockedPatterns = [
+    "localhost",
+    "127.",
+    "0.0.0.0",
+    "169.254.169.254", // AWS metadata service
+    "[::1]", // IPv6 localhost
+    "metadata.google.internal", // GCP metadata
+  ];
+
+  for (const pattern of blockedPatterns) {
+    if (hostname.includes(pattern)) {
+      throw new Error("Access to internal resources is not allowed");
+    }
+  }
+
+  // Block private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+  const ipv4Match = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    ) {
+      throw new Error("Access to private IP ranges is not allowed");
+    }
+  }
+};
+
+/**
+ * Fetch with timeout support
+ */
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = FETCH_TIMEOUT_MS,
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Merge abort signals if one was provided
+  const signal = options.signal
+    ? (() => {
+        const parentSignal = options.signal;
+        const combinedController = new AbortController();
+
+        parentSignal.addEventListener("abort", () => combinedController.abort());
+        controller.signal.addEventListener("abort", () => combinedController.abort());
+
+        return combinedController.signal;
+      })()
+    : controller.signal;
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Request timeout");
+    }
+    throw error;
+  }
 };
 
 type GatewayProviderOptions = {
@@ -58,14 +150,27 @@ const parseDataUrl = (
 };
 
 const fetchAsDataUrl = async (url: string, signal?: AbortSignal) => {
-  const response = await fetch(url, { signal });
+  // Validate URL to prevent SSRF
+  validateUrl(url);
+
+  const response = await fetchWithTimeout(url, {
+    signal,
+    redirect: "manual", // Prevent redirect-based SSRF
+  });
+
   if (!response.ok) {
     throw new Error(
       `Unable to download generated image (${response.status}) from ${url}`,
     );
   }
 
-  const mimeType = response.headers.get("content-type") ?? "image/png";
+  // Validate content type is actually an image
+  const contentType = response.headers.get("content-type");
+  if (contentType && !contentType.startsWith("image/")) {
+    throw new Error("URL does not point to an image");
+  }
+
+  const mimeType = contentType ?? "image/png";
   const buffer = Buffer.from(await response.arrayBuffer());
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 };
@@ -403,7 +508,7 @@ const openRouterImageModel: ImageModelV2 = {
     // Helper function to make a single API call
     const makeSingleRequest = async () => {
       const timestamp = new Date();
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: requestHeaders,
         body: JSON.stringify(body),
@@ -622,7 +727,7 @@ export async function streamImageGeneration(
     requestHeaders["X-Title"] = title;
   }
 
-  const response = await fetch(OPENROUTER_API_URL, {
+  const response = await fetchWithTimeout(OPENROUTER_API_URL, {
     method: "POST",
     headers: requestHeaders,
     body: JSON.stringify(body),
