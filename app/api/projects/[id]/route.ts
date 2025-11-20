@@ -37,3 +37,54 @@ export async function GET(
         return NextResponse.json({ error: "Failed to fetch project" }, { status: 500 });
     }
 }
+
+export async function PATCH(
+    request: NextRequest,
+    { params }: { params: Promise<{ id: string }> }
+) {
+    try {
+        const { id } = await params;
+        const body = await request.json();
+        const { name } = body;
+
+        if (!name || !name.trim()) {
+            return NextResponse.json({ error: "Name is required" }, { status: 400 });
+        }
+
+        const updateStmt = db.prepare("UPDATE projects SET name = ? WHERE id = ?");
+        const result = updateStmt.run(name.trim(), id);
+
+        if (result.changes === 0) {
+            return NextResponse.json({ error: "Project not found" }, { status: 404 });
+        }
+
+        const projectStmt = db.prepare("SELECT * FROM projects WHERE id = ?");
+        const project = projectStmt.get(id);
+
+        return NextResponse.json(project);
+    } catch (error) {
+        console.error("Failed to update project:", error);
+        return NextResponse.json({ error: "Failed to update project" }, { status: 500 });
+    }
+}
+
+export async function DELETE(
+    request: NextRequest,
+    { params }: { params: Promise<{ id: string }> }
+) {
+    try {
+        const { id } = await params;
+
+        const deleteStmt = db.prepare("DELETE FROM projects WHERE id = ?");
+        const result = deleteStmt.run(id);
+
+        if (result.changes === 0) {
+            return NextResponse.json({ error: "Project not found" }, { status: 404 });
+        }
+
+        return NextResponse.json({ success: true });
+    } catch (error) {
+        console.error("Failed to delete project:", error);
+        return NextResponse.json({ error: "Failed to delete project" }, { status: 500 });
+    }
+}

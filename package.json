@@ -11,6 +11,8 @@
   "dependencies": {
     "ai": "^5.0.93",
     "better-sqlite3": "^12.4.1",
+    "file-saver": "^2.0.5",
+    "jszip": "^3.10.1",
     "next": "16.0.3",
     "react": "19.2.0",
     "react-dom": "19.2.0"
