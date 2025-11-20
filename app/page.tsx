@@ -1,9 +1,9 @@
 'use client';
 
-import Image from "next/image";
-import { FormEvent, useMemo, useState, useEffect, useCallback, useRef } from "react";
-import JSZip from "jszip";
 import { saveAs } from "file-saver";
+import JSZip from "jszip";
+import Image from "next/image";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const DECORATION_OPTIONS = [
   "Cake topper",
@@ -127,27 +127,27 @@ export default function Home() {
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ src: string; index: number; images: string[] } | null>(null);
-  
+
   // Toast system
   const [toasts, setToasts] = useState<Toast[]>([]);
-  
+
   // Search and filter
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'iterations'>('date');
-  
+
   // Project management
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState("");
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
-  
+
   // Form auto-save
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
+
   // Mobile gestures
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [touchEnd, setTouchEnd] = useState<{ x: number; y: number } | null>(null);
-  
+
   // Loading states
   const [downloadingImages, setDownloadingImages] = useState<Set<string>>(new Set());
 
@@ -156,7 +156,7 @@ export default function Home() {
     const id = Math.random().toString(36).substr(2, 9);
     const newToast: Toast = { id, message, type };
     setToasts((prev) => [...prev, newToast]);
-    
+
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
@@ -197,7 +197,7 @@ export default function Home() {
         const filename = `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${typePrefix}${index + 1}.png`;
         zip.file(filename, blob);
       });
-      
+
       await Promise.all(imagePromises);
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       const zipFilename = `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_decorations.zip`;
@@ -226,14 +226,14 @@ export default function Home() {
   // Project management functions
   const handleRenameProject = useCallback(async (projectId: string, newName: string) => {
     if (!newName.trim()) return;
-    
+
     try {
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName.trim() }),
       });
-      
+
       if (res.ok) {
         setProjects((prev) =>
           prev.map((p) => (p.id === projectId ? { ...p, name: newName.trim() } : p))
@@ -253,7 +253,7 @@ export default function Home() {
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'DELETE',
       });
-      
+
       if (res.ok) {
         setProjects((prev) => {
           const filtered = prev.filter((p) => p.id !== projectId);
@@ -278,7 +278,7 @@ export default function Home() {
       const res = await fetch(`/api/projects/${projectId}/iterations/${iterationId}`, {
         method: 'DELETE',
       });
-      
+
       if (res.ok) {
         setProjects((prev) =>
           prev.map((project) =>
@@ -355,7 +355,7 @@ export default function Home() {
 
   const handleTouchEnd = useCallback(() => {
     if (!touchStart || !touchEnd || !lightboxImage) return;
-    
+
     const distanceX = touchStart.x - touchEnd.x;
     const distanceY = touchStart.y - touchEnd.y;
     const isLeftSwipe = distanceX > 50;
@@ -375,7 +375,7 @@ export default function Home() {
   // Filtered and sorted projects
   const filteredAndSortedProjects = useMemo(() => {
     let filtered = projects;
-    
+
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter((p) =>
@@ -386,7 +386,7 @@ export default function Home() {
         )
       );
     }
-    
+
     const sorted = [...filtered].sort((a, b) => {
       switch (sortBy) {
         case 'name':
@@ -398,7 +398,7 @@ export default function Home() {
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       }
     });
-    
+
     return sorted;
   }, [projects, searchQuery, sortBy]);
 
@@ -492,11 +492,11 @@ export default function Home() {
 
   const navigateLightbox = (direction: 'prev' | 'next') => {
     if (!lightboxImage) return;
-    
-    const newIndex = direction === 'prev' 
-      ? lightboxImage.index - 1 
+
+    const newIndex = direction === 'prev'
+      ? lightboxImage.index - 1
       : lightboxImage.index + 1;
-    
+
     if (newIndex >= 0 && newIndex < lightboxImage.images.length) {
       setLightboxImage({
         ...lightboxImage,
@@ -671,7 +671,43 @@ export default function Home() {
     setError(null);
 
     try {
-      // 1. Generate Images
+      // Create temp iteration IMMEDIATELY before making the request
+      // This ensures loading placeholders show right away
+      const tempIterationId = `temp-${Date.now()}`;
+      const initialImages = Array.from({ length: selectedDecorations.length }, () => "");
+      const initialTypes = Array.from({ length: selectedDecorations.length }, () => null);
+
+      const tempIteration: PartyIteration = {
+        id: tempIterationId,
+        createdAt: new Date().toISOString(),
+        theme: theme.trim(),
+        details: details.trim() || undefined,
+        decorationTypes: [...selectedDecorations],
+        imageCount: selectedDecorations.length,
+        size: currentSizeOption.size,
+        aspectRatio: currentSizeOption.aspectRatio,
+        images: initialImages,
+        imageDecorationTypes: initialTypes,
+        prompt: "",
+        referenceImages: [...referenceImages],
+      };
+
+      // Add temp iteration immediately so loading placeholders show
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === activeProject.id
+            ? { ...project, iterations: [tempIteration, ...project.iterations] }
+            : project,
+        ),
+      );
+
+      // Scroll to temp iteration
+      setTimeout(() => {
+        const element = document.getElementById(`iteration-${tempIterationId}`);
+        element?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 100);
+
+      // Use streaming mode
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: {
@@ -685,6 +721,7 @@ export default function Home() {
           aspectRatio: currentSizeOption.aspectRatio,
           referenceImages,
           projectName: activeProject.name,
+          stream: true, // Enable streaming
         }),
       });
 
@@ -695,68 +732,21 @@ export default function Home() {
         throw new Error(data?.error ?? "Something went wrong while creating art");
       }
 
-      const data = (await response.json()) as {
-        images: string[];
-        decorationTypes: string[];
-        prompts: string[];
-      };
+      // Check if response is streaming (text/event-stream)
+      const contentType = response.headers.get("content-type");
+      const isStreaming = contentType?.includes("text/event-stream");
 
-      // 2. Save Iteration to DB
-      const saveRes = await fetch(`/api/projects/${activeProject.id}/iterations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          theme: theme.trim(),
-          details: details.trim(),
-          decorationTypes: selectedDecorations,
-          imageCount: selectedDecorations.length, // One image per decoration type
-          size: currentSizeOption.size,
-          aspectRatio: currentSizeOption.aspectRatio,
-          images: data.images,
-          imageDecorationTypes: data.decorationTypes,
-          prompt: data.prompts.join("\n\n---\n\n"), // Combine all prompts
-          referenceImages,
-        }),
-      });
-
-      if (!saveRes.ok) {
-        throw new Error("Failed to save your creation.");
+      if (isStreaming) {
+        await handleStreamingResponse(response, tempIterationId);
+      } else {
+        // Fallback to non-streaming mode
+        const data = (await response.json()) as {
+          images: string[];
+          decorationTypes: string[];
+          prompts: string[];
+        };
+        await saveAndDisplayIteration(data.images, data.decorationTypes, data.prompts);
       }
-
-      const { iterationId } = await saveRes.json();
-
-      // 3. Update Local State
-      const newIteration: PartyIteration = {
-        id: iterationId,
-        createdAt: new Date().toISOString(),
-        theme: theme.trim(),
-        details: details.trim() || undefined,
-        decorationTypes: [...selectedDecorations],
-        imageCount: selectedDecorations.length,
-        size: currentSizeOption.size,
-        aspectRatio: currentSizeOption.aspectRatio,
-        images: data.images,
-        imageDecorationTypes: data.decorationTypes,
-        prompt: data.prompts.join("\n\n---\n\n"),
-        referenceImages: [...referenceImages],
-      };
-
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === activeProject.id
-            ? { ...project, iterations: [newIteration, ...project.iterations] }
-            : project,
-        ),
-      );
-
-      // Scroll to new iteration
-      setTimeout(() => {
-        const element = document.getElementById(`iteration-${iterationId}`);
-        element?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }, 100);
-      
-      clearFormDraft();
-      showToast(`Generated ${data.images.length} decoration${data.images.length > 1 ? 's' : ''} successfully!`, 'success');
     } catch (generationError) {
       console.error("Failed to generate decorations:", generationError);
       const errorMessage = generationError instanceof Error
@@ -767,6 +757,259 @@ export default function Home() {
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const handleStreamingResponse = async (response: Response, tempIterationId: string) => {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("Response body is not readable");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Track received images and errors
+    const receivedImages: string[] = [];
+    const receivedTypes: string[] = [];
+    const receivedPrompts: string[] = [];
+    const imageMap = new Map<number, { image: string; decorationType: string; prompt: string }>();
+    const errorMap = new Map<number, { error: string; decorationType: string }>();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith("data: ")) continue;
+
+          const data = line.slice(6);
+          if (data === "[DONE]") {
+            console.log("[Streaming] Received [DONE] signal");
+            // All images received, finalize
+            // Don't filter - maintain array indices for proper display
+            const finalImages = selectedDecorations.map((_, idx) =>
+              imageMap.get(idx)?.image || ""
+            );
+            const finalTypes = selectedDecorations.map((_, idx) =>
+              imageMap.get(idx)?.decorationType || null
+            );
+            const finalPrompts = selectedDecorations.map((_, idx) =>
+              imageMap.get(idx)?.prompt || ""
+            );
+
+            const receivedCount = finalImages.filter(img => img).length;
+            console.log(`[Streaming] Finalizing: ${receivedCount}/${selectedDecorations.length} images`);
+
+            // If no images were received, show error
+            if (receivedCount === 0) {
+              const errors = Array.from(errorMap.values());
+              const errorMsg = errors.length > 0
+                ? errors.map(e => `${e.decorationType}: ${e.error}`).join("; ")
+                : "No images were generated. Please check your API credits and try again.";
+              throw new Error(errorMsg);
+            }
+
+            await saveAndDisplayIteration(finalImages.filter(img => img), finalTypes.filter(t => t) as string[], finalPrompts.filter(p => p), tempIterationId);
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(data);
+
+            // Handle errors - collect them but don't throw immediately
+            if (parsed.error) {
+              const errorMsg = typeof parsed.error === "string"
+                ? parsed.error
+                : parsed.error.message || "Unknown error";
+              const decorationType = parsed.decorationType || "Unknown";
+              const index = typeof parsed.index === "number" ? parsed.index : -1;
+
+              console.error(`[Streaming] Error for ${decorationType} (index ${index}):`, errorMsg);
+              errorMap.set(index, { error: errorMsg, decorationType });
+              // Continue processing other images
+              continue;
+            }
+
+            // Handle image chunks
+            if (parsed.image && typeof parsed.index === "number") {
+              const { image, decorationType, index, prompt } = parsed;
+
+              console.log(`[Streaming] Received image ${index + 1}/${selectedDecorations.length} for ${decorationType}`);
+              imageMap.set(index, { image, decorationType, prompt });
+
+              // Update the temporary iteration with new image
+              // Build arrays maintaining proper indices (empty strings for missing images)
+              const currentImages: string[] = Array.from({ length: selectedDecorations.length }, (_, idx) =>
+                imageMap.get(idx)?.image || ""
+              );
+              const currentTypes: (string | null)[] = Array.from({ length: selectedDecorations.length }, (_, idx) =>
+                imageMap.get(idx)?.decorationType || null
+              );
+              const currentPrompts: string[] = Array.from({ length: selectedDecorations.length }, (_, idx) =>
+                imageMap.get(idx)?.prompt || ""
+              );
+
+              console.log(`[Streaming] Updating UI: ${currentImages.filter(img => img).length}/${selectedDecorations.length} images received`);
+
+              setProjects((prev) =>
+                prev.map((project) =>
+                  project.id === activeProject!.id
+                    ? {
+                      ...project,
+                      iterations: project.iterations.map((iter) =>
+                        iter.id === tempIterationId
+                          ? {
+                            ...iter,
+                            images: [...currentImages], // Create new array to ensure React detects change
+                            imageDecorationTypes: [...currentTypes],
+                            prompt: currentPrompts.join("\n\n---\n\n"),
+                          }
+                          : iter,
+                      ),
+                    }
+                    : project,
+                ),
+              );
+            }
+          } catch (parseError) {
+            // Log actual parse errors for debugging, but continue processing
+            console.warn("[Streaming] Failed to parse chunk:", parseError, "Data:", data.substring(0, 200));
+            continue;
+          }
+        }
+      }
+
+      // Handle remaining buffer
+      if (buffer.trim() && buffer.startsWith("data: ")) {
+        const data = buffer.slice(6);
+        if (data !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.image && typeof parsed.index === "number") {
+              const { image, decorationType, index, prompt } = parsed;
+              imageMap.set(index, { image, decorationType, prompt });
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+
+      // Finalize with all received images (stream ended without [DONE])
+      console.log("[Streaming] Stream ended, finalizing with received images");
+      const finalImages = selectedDecorations.map((_, idx) =>
+        imageMap.get(idx)?.image || ""
+      );
+      const finalTypes = selectedDecorations.map((_, idx) =>
+        imageMap.get(idx)?.decorationType || null
+      );
+      const finalPrompts = selectedDecorations.map((_, idx) =>
+        imageMap.get(idx)?.prompt || ""
+      );
+
+      const receivedCount = finalImages.filter(img => img).length;
+      console.log(`[Streaming] Finalizing: ${receivedCount}/${selectedDecorations.length} images received`);
+
+      if (receivedCount === 0) {
+        const errors = Array.from(errorMap.values());
+        const errorMsg = errors.length > 0
+          ? errors.map(e => `${e.decorationType}: ${e.error}`).join("; ")
+          : "No images were received from the stream";
+        throw new Error(errorMsg);
+      }
+
+      await saveAndDisplayIteration(finalImages.filter(img => img), finalTypes.filter(t => t) as string[], finalPrompts.filter(p => p), tempIterationId);
+    } catch (streamError) {
+      console.error("[Streaming] Error during streaming:", streamError);
+      // Remove temp iteration on error
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === activeProject!.id
+            ? {
+              ...project,
+              iterations: project.iterations.filter((iter) => iter.id !== tempIterationId),
+            }
+            : project,
+        ),
+      );
+      throw streamError;
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  const saveAndDisplayIteration = async (
+    images: string[],
+    decorationTypes: string[],
+    prompts: string[],
+    tempIterationId?: string,
+  ) => {
+    // Save to DB
+    const saveRes = await fetch(`/api/projects/${activeProject!.id}/iterations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        theme: theme.trim(),
+        details: details.trim(),
+        decorationTypes: selectedDecorations,
+        imageCount: selectedDecorations.length,
+        size: currentSizeOption.size,
+        aspectRatio: currentSizeOption.aspectRatio,
+        images,
+        imageDecorationTypes: decorationTypes,
+        prompt: prompts.join("\n\n---\n\n"),
+        referenceImages,
+      }),
+    });
+
+    if (!saveRes.ok) {
+      throw new Error("Failed to save your creation.");
+    }
+
+    const { iterationId } = await saveRes.json();
+
+    // Update local state with final iteration
+    const newIteration: PartyIteration = {
+      id: iterationId,
+      createdAt: new Date().toISOString(),
+      theme: theme.trim(),
+      details: details.trim() || undefined,
+      decorationTypes: [...selectedDecorations],
+      imageCount: selectedDecorations.length,
+      size: currentSizeOption.size,
+      aspectRatio: currentSizeOption.aspectRatio,
+      images,
+      imageDecorationTypes: decorationTypes,
+      prompt: prompts.join("\n\n---\n\n"),
+      referenceImages: [...referenceImages],
+    };
+
+    setProjects((prev) =>
+      prev.map((project) =>
+        project.id === activeProject!.id
+          ? {
+            ...project,
+            iterations: project.iterations.map((iter) =>
+              iter.id === tempIterationId ? newIteration : iter,
+            ),
+          }
+          : project,
+      ),
+    );
+
+    // Scroll to final iteration
+    setTimeout(() => {
+      const element = document.getElementById(`iteration-${iterationId}`);
+      element?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 100);
+
+    clearFormDraft();
+    showToast(`Generated ${images.length} decoration${images.length > 1 ? 's' : ''} successfully!`, 'success');
   };
 
   if (isLoadingProjects) {
@@ -943,11 +1186,10 @@ export default function Home() {
                     return (
                       <div
                         key={project.id}
-                        className={`group relative w-full rounded-xl border transition-all duration-200 ${
-                          isActive
-                            ? "border-pink-300 bg-gradient-to-r from-pink-50 to-violet-50 shadow-md"
-                            : "border-zinc-200 bg-white hover:border-pink-200 hover:bg-pink-50/50 hover:shadow-sm"
-                        }`}
+                        className={`group relative w-full rounded-xl border transition-all duration-200 ${isActive
+                          ? "border-pink-300 bg-gradient-to-r from-pink-50 to-violet-50 shadow-md"
+                          : "border-zinc-200 bg-white hover:border-pink-200 hover:bg-pink-50/50 hover:shadow-sm"
+                          }`}
                         style={{ animationDelay: `${index * 50}ms` }}
                       >
                         <div className="relative z-10 flex items-start gap-2 p-3">
@@ -985,9 +1227,8 @@ export default function Home() {
                               />
                             ) : (
                               <>
-                                <p className={`truncate text-sm font-semibold ${
-                                  isActive ? "text-pink-900" : "text-zinc-900"
-                                }`}>
+                                <p className={`truncate text-sm font-semibold ${isActive ? "text-pink-900" : "text-zinc-900"
+                                  }`}>
                                   {project.name}
                                 </p>
                                 <p className="mt-1 text-xs text-zinc-500">
@@ -997,18 +1238,16 @@ export default function Home() {
                             )}
                           </button>
                           <div className="flex items-center gap-1">
-                            <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                              isActive
-                                ? "bg-pink-200 text-pink-800"
-                                : "bg-zinc-100 text-zinc-600"
-                            }`}>
+                            <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${isActive
+                              ? "bg-pink-200 text-pink-800"
+                              : "bg-zinc-100 text-zinc-600"
+                              }`}>
                               {project.iterations.length}
                             </span>
-                            <div className={`flex items-center gap-1 transition-opacity duration-200 ${
-                              isActive 
-                                ? 'opacity-100' 
-                                : 'opacity-0 group-hover:opacity-100'
-                            }`}>
+                            <div className={`flex items-center gap-1 transition-opacity duration-200 ${isActive
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-100'
+                              }`}>
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1160,11 +1399,10 @@ export default function Home() {
                           type="button"
                           key={option}
                           onClick={() => toggleDecoration(option)}
-                          className={`group relative rounded-full border px-4 py-2 text-sm font-medium transition-all duration-200 ${
-                            isSelected
-                              ? "border-pink-400 bg-gradient-to-r from-pink-50 to-violet-50 text-pink-700 shadow-sm"
-                              : "border-zinc-200 bg-white text-zinc-600 hover:border-pink-300 hover:bg-pink-50/50"
-                          }`}
+                          className={`group relative rounded-full border px-4 py-2 text-sm font-medium transition-all duration-200 ${isSelected
+                            ? "border-pink-400 bg-gradient-to-r from-pink-50 to-violet-50 text-pink-700 shadow-sm"
+                            : "border-zinc-200 bg-white text-zinc-600 hover:border-pink-300 hover:bg-pink-50/50"
+                            }`}
                         >
                           {option}
                           {isSelected && (
@@ -1211,18 +1449,16 @@ export default function Home() {
                             type="button"
                             key={option.id}
                             onClick={() => setSizeChoice(option.id)}
-                            className={`group w-full rounded-lg border px-4 py-3 text-left transition-all duration-200 ${
-                              isActive
-                                ? "border-violet-400 bg-gradient-to-r from-violet-50 to-pink-50 shadow-sm"
-                                : "border-zinc-200 bg-white hover:border-violet-300 hover:bg-violet-50/50"
-                            }`}
+                            className={`group w-full rounded-lg border px-4 py-3 text-left transition-all duration-200 ${isActive
+                              ? "border-violet-400 bg-gradient-to-r from-violet-50 to-pink-50 shadow-sm"
+                              : "border-zinc-200 bg-white hover:border-violet-300 hover:bg-violet-50/50"
+                              }`}
                           >
                             <div className="flex items-center gap-3">
                               <span className="text-xl">{option.icon}</span>
                               <div className="flex-1">
-                                <p className={`text-sm font-semibold ${
-                                  isActive ? "text-violet-700" : "text-zinc-900"
-                                }`}>
+                                <p className={`text-sm font-semibold ${isActive ? "text-violet-700" : "text-zinc-900"
+                                  }`}>
                                   {option.label}
                                 </p>
                                 <p className="mt-0.5 text-xs text-zinc-500">
@@ -1250,11 +1486,10 @@ export default function Home() {
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleReferenceDrop}
-                    className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all duration-200 ${
-                      isDragging
-                        ? "border-pink-400 bg-pink-50/50 scale-[1.02]"
-                        : "border-zinc-300 bg-white hover:border-pink-300 hover:bg-pink-50/30"
-                    }`}
+                    className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-all duration-200 ${isDragging
+                      ? "border-pink-400 bg-pink-50/50 scale-[1.02]"
+                      : "border-zinc-300 bg-white hover:border-pink-300 hover:bg-pink-50/30"
+                      }`}
                   >
                     <input
                       id="reference-images"
@@ -1494,85 +1729,106 @@ export default function Home() {
 
                         {/* Generated Images */}
                         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {iteration.images.map((src, index) => {
-                            const decorationType = iteration.imageDecorationTypes?.[index];
+                          {iteration.decorationTypes.map((decorationType, index) => {
+                            const src = iteration.images[index];
+                            const imageDecorationType = iteration.imageDecorationTypes?.[index];
+                            const isStreaming = iteration.id.startsWith('temp-') && !src;
+
                             return (
-                            <div
-                              key={`${iteration.id}-image-${index}`}
-                              className="group/image relative overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 transition-all duration-200 hover:border-pink-300 hover:shadow-md"
-                            >
-                              {decorationType && (
-                                <div className="absolute left-2 top-2 z-10">
-                                  <span className="inline-block rounded-lg bg-gradient-to-r from-pink-500 to-violet-500 px-3 py-1 text-xs font-bold text-white shadow-md">
-                                    {decorationType}
-                                  </span>
-                                </div>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => openLightbox(src, index, iteration.images)}
-                                className="relative block w-full focus:outline-none focus:ring-2 focus:ring-pink-500"
-                                aria-label={`View ${decorationType || 'decoration'} in full size`}
+                              <div
+                                key={`${iteration.id}-image-${index}`}
+                                className="group/image relative overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 transition-all duration-200 hover:border-pink-300 hover:shadow-md"
                               >
-                                <Image
-                                  src={src}
-                                  alt={decorationType ? `${decorationType} decoration` : `Generated decoration ${index + 1}`}
-                                  width={600}
-                                  height={600}
-                                  className="h-48 w-full object-cover transition-transform duration-300 group-hover/image:scale-105"
-                                  loading="lazy"
-                                />
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all duration-200 group-hover/image:bg-black/10">
-                                  <div className="opacity-0 transition-opacity duration-200 group-hover/image:opacity-100">
-                                    <svg className="h-8 w-8 text-white drop-shadow-lg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
-                                    </svg>
+                                {imageDecorationType && (
+                                  <div className="absolute left-2 top-2 z-10">
+                                    <span className="inline-block rounded-lg bg-gradient-to-r from-pink-500 to-violet-500 px-3 py-1 text-xs font-bold text-white shadow-md">
+                                      {imageDecorationType}
+                                    </span>
                                   </div>
-                                </div>
-                              </button>
-                              <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover/image:opacity-100">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const decorationType = iteration.imageDecorationTypes?.[index];
-                                    const typePrefix = decorationType ? `${decorationType.replace(/[^a-z0-9]/gi, '_')}_` : '';
-                                    downloadImage(src, `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${typePrefix}${index + 1}.png`);
-                                  }}
-                                  disabled={downloadingImages.has(src)}
-                                  className="rounded-full bg-white/95 p-2 shadow-md transition-all hover:bg-green-50 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
-                                  title="Download image"
-                                  aria-label="Download image"
-                                >
-                                  {downloadingImages.has(src) ? (
-                                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                    </svg>
-                                  ) : (
-                                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                    </svg>
-                                  )}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    copyImageToClipboard(src);
-                                  }}
-                                  className="rounded-full bg-white/95 p-2 shadow-md transition-all hover:bg-violet-50 hover:text-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                                  title="Copy image"
-                                  aria-label="Copy image"
-                                >
-                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                  </svg>
-                                </button>
+                                )}
+                                {isStreaming && (
+                                  <div className="absolute left-2 top-2 z-10">
+                                    <span className="inline-block rounded-lg bg-zinc-500 px-3 py-1 text-xs font-bold text-white shadow-md animate-pulse">
+                                      {decorationType}...
+                                    </span>
+                                  </div>
+                                )}
+                                {src ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => openLightbox(src, index, iteration.images)}
+                                      className="relative block w-full focus:outline-none focus:ring-2 focus:ring-pink-500"
+                                      aria-label={`View ${imageDecorationType || 'decoration'} in full size`}
+                                    >
+                                      <Image
+                                        src={src}
+                                        alt={imageDecorationType ? `${imageDecorationType} decoration` : `Generated decoration ${index + 1}`}
+                                        width={600}
+                                        height={600}
+                                        className="h-48 w-full object-cover transition-transform duration-300 group-hover/image:scale-105"
+                                        loading="lazy"
+                                      />
+                                      <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all duration-200 group-hover/image:bg-black/10">
+                                        <div className="opacity-0 transition-opacity duration-200 group-hover/image:opacity-100">
+                                          <svg className="h-8 w-8 text-white drop-shadow-lg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+                                          </svg>
+                                        </div>
+                                      </div>
+                                    </button>
+                                    <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover/image:opacity-100">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const decorationType = iteration.imageDecorationTypes?.[index];
+                                          const typePrefix = decorationType ? `${decorationType.replace(/[^a-z0-9]/gi, '_')}_` : '';
+                                          downloadImage(src, `${iteration.theme.replace(/[^a-z0-9]/gi, '_')}_${typePrefix}${index + 1}.png`);
+                                        }}
+                                        disabled={downloadingImages.has(src)}
+                                        className="rounded-full bg-white/95 p-2 shadow-md transition-all hover:bg-green-50 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
+                                        title="Download image"
+                                        aria-label="Download image"
+                                      >
+                                        {downloadingImages.has(src) ? (
+                                          <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                          </svg>
+                                        ) : (
+                                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                          </svg>
+                                        )}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyImageToClipboard(src);
+                                        }}
+                                        className="rounded-full bg-white/95 p-2 shadow-md transition-all hover:bg-violet-50 hover:text-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                                        title="Copy image"
+                                        aria-label="Copy image"
+                                      >
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="relative flex h-48 w-full items-center justify-center bg-zinc-100">
+                                    <div className="flex flex-col items-center gap-2">
+                                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-pink-500 border-b-transparent" />
+                                      <span className="text-sm text-zinc-500">Generating {decorationType}...</span>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          )}
-                          )}
+                            );
+                          })}
                         </div>
 
                         {/* Prompt Details */}
@@ -1603,13 +1859,12 @@ export default function Home() {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`flex min-w-[300px] items-start gap-3 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm animate-fade-in ${
-              toast.type === 'success'
-                ? 'border-green-200 bg-green-50 text-green-800'
-                : toast.type === 'error'
+            className={`flex min-w-[300px] items-start gap-3 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm animate-fade-in ${toast.type === 'success'
+              ? 'border-green-200 bg-green-50 text-green-800'
+              : toast.type === 'error'
                 ? 'border-red-200 bg-red-50 text-red-800'
                 : 'border-blue-200 bg-blue-50 text-blue-800'
-            }`}
+              }`}
           >
             <div className="flex-1">
               <p className="text-sm font-medium">{toast.message}</p>
@@ -1642,7 +1897,7 @@ export default function Home() {
           >
             <h3 className="mb-2 text-lg font-bold text-zinc-900">Delete Project?</h3>
             <p className="mb-6 text-sm text-zinc-600">
-              Are you sure you want to delete "{projects.find(p => p.id === deletingProjectId)?.name}"? 
+              Are you sure you want to delete "{projects.find(p => p.id === deletingProjectId)?.name}"?
               This will delete all iterations and cannot be undone.
             </p>
             <div className="flex gap-3">

@@ -536,3 +536,287 @@ const openRouterProvider = customProvider({
 });
 
 export const gatewayImage = openRouterProvider.imageModel(OPENROUTER_IMAGE_MODEL_ID);
+
+export type StreamImageOptions = {
+  prompt: string;
+  size?: string;
+  aspectRatio?: string;
+  referenceImages?: string[];
+  abortSignal?: AbortSignal;
+};
+
+export type StreamImageChunk = {
+  image: string;
+  decorationType: string;
+  index: number;
+  prompt: string;
+};
+
+/**
+ * Stream image generation from OpenRouter API
+ * Returns a ReadableStream that yields image chunks as they arrive
+ */
+export async function streamImageGeneration(
+  options: StreamImageOptions,
+): Promise<ReadableStream<StreamImageChunk>> {
+  const { prompt, size, aspectRatio, referenceImages = [], abortSignal } = options;
+  const apiKey = getOpenRouterApiKey();
+
+  const userContent: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: prompt,
+    },
+    ...referenceImages.map((image) => ({
+      type: "image_url",
+      image_url: {
+        url: ensureDataUrl(image),
+      },
+    })),
+  ];
+
+  const systemMessage = [
+    "You are a playful party stylist that designs printable kids party decorations.",
+    "Provide only finished artwork output that can be turned into toppers, banners, or signage.",
+  ].join(" ");
+
+  const userMessage = referenceImages.length > 0
+    ? userContent
+    : prompt;
+
+  const body: Record<string, unknown> = {
+    model: OPENROUTER_IMAGE_MODEL_ID,
+    messages: [
+      {
+        role: "system",
+        content: systemMessage,
+      },
+      {
+        role: "user",
+        content: userMessage,
+      },
+    ],
+    modalities: ["image", "text"],
+    stream: true,
+  };
+
+  if (size) {
+    body.size = size;
+  }
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
+  }
+
+  const requestHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  const referer = process.env.OPENROUTER_SITE_URL;
+  if (referer) {
+    requestHeaders["HTTP-Referer"] = referer;
+  }
+  const title = process.env.OPENROUTER_APP_NAME;
+  if (title) {
+    requestHeaders["X-Title"] = title;
+  }
+
+  const response = await fetch(OPENROUTER_API_URL, {
+    method: "POST",
+    headers: requestHeaders,
+    body: JSON.stringify(body),
+    signal: abortSignal,
+  });
+
+  // Handle errors before streaming starts
+  if (!response.ok) {
+    const responseText = await response.text();
+    let errorMessage = `OpenRouter image generation failed (${response.status}).`;
+    
+    try {
+      const parsed = JSON.parse(responseText);
+      if (parsed && typeof parsed === "object") {
+        if ("error" in parsed && parsed.error && typeof parsed.error === "object" && "message" in parsed.error) {
+          errorMessage = parsed.error.message as string;
+        } else if ("error" in parsed && typeof parsed.error === "string") {
+          errorMessage = parsed.error;
+        } else if ("message" in parsed && typeof parsed.message === "string") {
+          errorMessage = parsed.message;
+        }
+      }
+    } catch {
+      // Use default error message
+    }
+    
+    throw new Error(errorMessage);
+  }
+
+  // Create a readable stream that processes SSE chunks
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Response body is not readable");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  return new ReadableStream<StreamImageChunk>({
+    async start(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+
+            // Handle SSE format: "data: {...}" or "data: [DONE]"
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6);
+              if (data === "[DONE]") {
+                controller.close();
+                return;
+              }
+
+              try {
+                const parsed = JSON.parse(data);
+
+                // Debug: log all parsed chunks to understand the format
+                if (parsed.choices || parsed.type || parsed.delta) {
+                  console.log("[Gateway] Received chunk:", JSON.stringify(parsed).substring(0, 300));
+                }
+
+                // Handle errors during streaming
+                if (parsed && typeof parsed === "object" && "error" in parsed) {
+                  const errorMsg = 
+                    (parsed.error && typeof parsed.error === "object" && "message" in parsed.error)
+                      ? parsed.error.message
+                      : typeof parsed.error === "string"
+                        ? parsed.error
+                        : "Unknown error during streaming";
+                  controller.error(new Error(errorMsg));
+                  return;
+                }
+
+                // Extract images from delta.images (OpenRouter streaming format)
+                if (parsed.choices && Array.isArray(parsed.choices)) {
+                  for (const choice of parsed.choices) {
+                    if (choice && typeof choice === "object" && "delta" in choice) {
+                      const delta = choice.delta as { 
+                        images?: Array<{ 
+                          type?: string; 
+                          image_url?: { url?: string } 
+                        }> 
+                      };
+                      
+                      if (delta.images && Array.isArray(delta.images)) {
+                        for (const image of delta.images) {
+                          if (image.image_url?.url) {
+                            const imageUrl = image.image_url.url;
+                            // Ensure it's a data URL (OpenRouter sends base64 data URLs)
+                            const dataUrl = imageUrl.startsWith("data:") 
+                              ? imageUrl 
+                              : `data:image/png;base64,${imageUrl}`;
+                            
+                            // Note: decorationType and index will be set by the API route
+                            controller.enqueue({
+                              image: dataUrl,
+                              decorationType: "", // Set by API route
+                              index: 0, // Set by API route
+                              prompt: prompt,
+                            });
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                
+                // Also check for images in message.content format (alternative format)
+                if (parsed.choices && Array.isArray(parsed.choices)) {
+                  for (const choice of parsed.choices) {
+                    if (choice && typeof choice === "object" && "message" in choice) {
+                      const message = (choice as { message?: { content?: unknown } }).message;
+                      if (message && typeof message === "object" && "content" in message) {
+                        const content = message.content;
+                        if (Array.isArray(content)) {
+                          for (const part of content) {
+                            if (part && typeof part === "object" && "type" in part) {
+                              if (part.type === "image_url" && "image_url" in part) {
+                                const imgUrl = (part as { image_url?: { url?: string } }).image_url?.url;
+                                if (imgUrl) {
+                                  const dataUrl = imgUrl.startsWith("data:") 
+                                    ? imgUrl 
+                                    : `data:image/png;base64,${imgUrl}`;
+                                  controller.enqueue({
+                                    image: dataUrl,
+                                    decorationType: "",
+                                    index: 0,
+                                    prompt: prompt,
+                                  });
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (parseError) {
+                // Skip invalid JSON lines
+                continue;
+              }
+            }
+          }
+        }
+
+        // Process any remaining buffer
+        if (buffer.trim()) {
+          if (buffer.startsWith("data: ")) {
+            const data = buffer.slice(6);
+            if (data !== "[DONE]") {
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.choices && Array.isArray(parsed.choices)) {
+                  for (const choice of parsed.choices) {
+                    if (choice && typeof choice === "object" && "delta" in choice) {
+                      const delta = choice.delta as { images?: Array<{ type?: string; image_url?: { url?: string } }> };
+                      if (delta.images && Array.isArray(delta.images)) {
+                        for (const image of delta.images) {
+                          if (image.image_url?.url) {
+                            const imageUrl = image.image_url.url;
+                            const dataUrl = imageUrl.startsWith("data:") 
+                              ? imageUrl 
+                              : `data:image/png;base64,${imageUrl}`;
+                            controller.enqueue({
+                              image: dataUrl,
+                              decorationType: "",
+                              index: 0,
+                              prompt: prompt,
+                            });
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error instanceof Error ? error : new Error("Streaming error"));
+      }
+    },
+  });
+}
