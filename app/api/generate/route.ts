@@ -3,7 +3,7 @@ import {
   experimental_generateImage as generateImage,
   type GeneratedFile,
 } from "ai";
-import { gatewayImage } from "@/lib/gateway";
+import { gatewayImage, streamImageGeneration } from "@/lib/gateway";
 import { buildDecorationPrompt } from "@/lib/decoration-prompts";
 
 const DEFAULT_DECORATIONS = [
@@ -28,6 +28,7 @@ type GenerateRequest = {
   size?: string;
   aspectRatio?: string;
   projectName?: string;
+  stream?: boolean;
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -94,6 +95,20 @@ export async function POST(request: NextRequest) {
       ? body.aspectRatio
       : undefined;
 
+    // Handle streaming mode
+    if (body.stream) {
+      return handleStreamingGeneration(
+        selectedTypes,
+        theme,
+        body.details?.trim(),
+        body.projectName,
+        referenceImages,
+        size,
+        aspectRatio,
+      );
+    }
+
+    // Non-streaming mode (existing implementation)
     const providerOptions =
       referenceImages.length > 0
         ? { gateway: { referenceImages } }
@@ -147,4 +162,99 @@ export async function POST(request: NextRequest) {
       error instanceof Error ? error.message : "Unable to generate images";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+async function handleStreamingGeneration(
+  decorationTypes: string[],
+  theme: string,
+  details: string | undefined,
+  projectName: string | undefined,
+  referenceImages: string[],
+  size: string,
+  aspectRatio: string | undefined,
+) {
+  const encoder = new TextEncoder();
+
+  // Create a readable stream for SSE
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        // Generate images in parallel, but stream them as they arrive
+        const streamPromises = decorationTypes.map(async (decorationType, index) => {
+          const prompt = buildDecorationPrompt(
+            decorationType,
+            theme,
+            details,
+            projectName,
+            referenceImages.length
+          );
+
+          try {
+            const imageStream = await streamImageGeneration({
+              prompt,
+              size,
+              aspectRatio,
+              referenceImages,
+            });
+
+            const reader = imageStream.getReader();
+            let imageReceived = false;
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              if (value && value.image) {
+                imageReceived = true;
+                // Send SSE chunk
+                const chunk = {
+                  image: value.image,
+                  decorationType,
+                  index,
+                  prompt,
+                };
+                const data = `data: ${JSON.stringify(chunk)}\n\n`;
+                controller.enqueue(encoder.encode(data));
+              }
+            }
+
+            reader.releaseLock();
+
+            if (!imageReceived) {
+              throw new Error(`No image received for ${decorationType}`);
+            }
+          } catch (error) {
+            // Send error as SSE event
+            const errorChunk = {
+              error: error instanceof Error ? error.message : "Failed to generate image",
+              decorationType,
+              index,
+            };
+            const data = `data: ${JSON.stringify(errorChunk)}\n\n`;
+            controller.enqueue(encoder.encode(data));
+          }
+        });
+
+        // Wait for all streams to complete
+        await Promise.all(streamPromises);
+
+        // Send completion signal
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Streaming error";
+        const errorData = `data: ${JSON.stringify({ error: errorMessage })}\n\n`;
+        controller.enqueue(encoder.encode(errorData));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
